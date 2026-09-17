@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>블랙홀 3D 시뮬레이션</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", "Malgun Gothic", sans-serif; color: #dfe6f3; }
+  #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+  #c.dragging { cursor: grabbing; }
+
+  #ui {
+    position: fixed; top: 16px; left: 16px; width: 290px; max-width: calc(100vw - 32px);
+    background: rgba(8, 10, 18, 0.72); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 14px 16px;
+    font-size: 13px; line-height: 1.5; user-select: none;
+    transition: transform .25s ease, opacity .25s ease;
+  }
+  #ui.hidden { transform: translateX(-110%); opacity: 0; pointer-events: none; }
+  #ui h1 { font-size: 16px; margin: 0 0 4px 0; font-weight: 600; letter-spacing: .02em; }
+  #ui .sub { color: #8c96ad; font-size: 12px; margin-bottom: 10px; }
+  #ui .hint { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; color: #b9c2d6; font-size: 12px; margin-bottom: 12px; }
+  #ui .hint b { color: #fff; font-weight: 600; }
+  #ui .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 6px 0; }
+  #ui label { color: #c8d0e2; white-space: nowrap; }
+  #ui input[type=range] { width: 130px; accent-color: #ff9a3c; }
+  #ui select { background: #141827; color: #e6ebf5; border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; padding: 3px 6px; font-size: 12px; }
+  #ui input[type=checkbox] { accent-color: #ff9a3c; width: 16px; height: 16px; }
+  #ui .val { color: #8c96ad; font-size: 11px; min-width: 32px; text-align: right; }
+  #ui .btns { display: flex; gap: 8px; margin-top: 10px; }
+  #ui button, #show button {
+    background: rgba(255,255,255,0.08); color: #e6ebf5; border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; flex: 1;
+  }
+  #ui button:hover, #show button:hover { background: rgba(255,255,255,0.16); }
+  #ui .info { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.08); color: #8c96ad; font-size: 11px; line-height: 1.55; }
+  #ui .info span { color: #ffb56b; }
+
+  #show { position: fixed; top: 16px; left: 16px; display: none; }
+  #show.visible { display: block; }
+  #fps { position: fixed; right: 12px; bottom: 10px; font-size: 11px; color: rgba(255,255,255,0.45); font-variant-numeric: tabular-nums; }
+  #err { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 24px; text-align: center; color: #ffb4b4; background: #000; white-space: pre-wrap; font-size: 14px; }
+  #err.visible { display: flex; }
+  @media (max-width: 480px) {
+    #ui { font-size: 12px; padding: 12px; }
+    #ui input[type=range] { width: 100px; }
+    #ui .info { display: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="ui">
+  <h1>블랙홀 3D 시뮬레이션</h1>
+  <div class="sub">슈바르츠실트 블랙홀 · 실시간 광선 추적</div>
+  <div class="hint">
+    <b>드래그</b><span>시점 회전</span>
+    <b>휠 / 핀치</b><span>확대 · 축소</span>
+    <b>더블클릭</b><span>시점 초기화</span>
+  </div>
+  <div class="row"><label for="disk">강착원반 밝기</label><input id="disk" type="range" min="0" max="2.5" step="0.05" value="1"><span class="val" id="diskV">1.00</span></div>
+  <div class="row"><label for="speed">시간 속도</label><input id="speed" type="range" min="0" max="3" step="0.05" value="1"><span class="val" id="speedV">1.00</span></div>
+  <div class="row"><label for="grav">렌즈 효과 강도</label><input id="grav" type="range" min="0.3" max="1.5" step="0.05" value="1"><span class="val" id="gravV">1.00</span></div>
+  <div class="row"><label for="quality">화질</label><select id="quality"><option value="low">낮음 (빠름)</option><option value="mid" selected>보통</option><option value="high">높음</option></select></div>
+  <div class="row"><label for="auto">자동 회전</label><input id="auto" type="checkbox" checked></div>
+  <div class="row"><label for="parts">빨려드는 입자 표시</label><input id="parts" type="checkbox" checked></div>
+  <div class="btns"><button id="reset">시점 초기화</button><button id="hide">패널 숨기기</button></div>
+  <div class="info">
+    빛의 경로가 중력에 의해 휘어지는 <span>중력 렌즈</span> 효과로 블랙홀 뒤쪽 원반이 위아래로 감싸 보이고, 그림자 가장자리에는 <span>광자 고리</span>가 생깁니다.
+    원반의 한쪽이 더 밝은 것은 관측자를 향해 회전하는 물질이 밝아지는 <span>도플러 빔 효과</span>이며, 배경의 별과 은하도 렌즈에 의해 왜곡됩니다.
+  </div>
+</div>
+<div id="show"><button id="showBtn">☰ 패널 보기</button></div>
+<div id="fps"></div>
+<div id="err"></div>
+
+<script>
+(function () {
+'use strict';
+
+/* ------------------------------------------------------------------ */
+/*  셰이더                                                              */
+/* ------------------------------------------------------------------ */
+
+const VS_QUAD = `
+attribute vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+`;
+
+// 단위: 슈바르츠실트 반지름 r_s = 1, c = 1
+const FS_BH = `
+precision highp float;
+uniform vec2  uRes;
+uniform float uTime;
+uniform vec3  uCamPos, uCamRight, uCamUp, uCamFwd;
+uniform float uTanFov, uDiskBright, uGravity, uExposure;
+uniform int   uSteps;
+
+const float PI      = 3.14159265359;
+const float R_IN    = 2.9;   // 원반 안쪽 가장자리 (ISCO 근처)
+const float R_OUT   = 12.0;  // 원반 바깥 가장자리
+const float R_MARCH = 16.0;  // 이 반지름 밖으로 나가는 광선은 해석적으로 마무리
+
+/* ---------- 해시 / 노이즈 ---------- */
+float hash13(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+vec4  hash43(vec3 p) { vec4 p4 = fract(vec4(p.xyzx) * vec4(0.1031, 0.1030, 0.0973, 0.1099)); p4 += dot(p4, p4.wzxy + 33.33); return fract((p4.xxyz + p4.yzzw) * p4.zywx); }
+
+float noise3(vec3 p) {
+  vec3 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(
+    mix(mix(hash13(i + vec3(0,0,0)), hash13(i + vec3(1,0,0)), f.x),
+        mix(hash13(i + vec3(0,1,0)), hash13(i + vec3(1,1,0)), f.x), f.y),
+    mix(mix(hash13(i + vec3(0,0,1)), hash13(i + vec3(1,0,1)), f.x),
+        mix(hash13(i + vec3(0,1,1)), hash13(i + vec3(1,1,1)), f.x), f.y), f.z);
+}
+float fbm3(vec3 p) {
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 4; i++) { v += a * noise3(p); p = p * 2.03 + vec3(1.7, 9.2, 3.1); a *= 0.5; }
+  return v;
+}
+float noise2(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash12(i), hash12(i + vec2(1,0)), f.x), mix(hash12(i + vec2(0,1)), hash12(i + vec2(1,1)), f.x), f.y);
+}
+float fbm2(vec2 p) {
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 4; i++) { v += a * noise2(p); p = p * 2.07 + vec2(3.3, 7.1); a *= 0.5; }
+  return v;
+}
+
+/* ---------- 배경: 별 ---------- */
+vec3 stars(vec3 d, float N, float thresh, float pixAng) {
+  vec3 p = d * N;
+  vec3 c = floor(p);
+  vec3 col = vec3(0.0);
+  for (int i = -1; i <= 1; i++)
+  for (int j = -1; j <= 1; j++)
+  for (int k = -1; k <= 1; k++) {
+    vec3 cc = c + vec3(float(i), float(j), float(k));
+    vec4 h = hash43(cc);
+    if (h.w < thresh) continue;
+    vec3 sd = normalize(cc + h.xyz);
+    float ca = dot(d, sd);
+    float t = (h.w - thresh) / (1.0 - thresh);
+    float ang = max(0.0007 + 0.0026 * t * t * t, pixAng * 0.75);
+    float I = exp(-(1.0 - ca) * 2.0 / (ang * ang));
+    vec3 sc = mix(vec3(0.62, 0.74, 1.0), vec3(1.0, 0.82, 0.58), h.x);
+    col += sc * I * (0.2 + 1.1 * t * t);
+    col += sc * exp(-(1.0 - ca) * 2.0 / (ang * ang * 45.0)) * 0.035 * t * t;
+  }
+  return col;
+}
+
+/* ---------- 배경: 은하수 ---------- */
+vec3 milkyWay(vec3 d) {
+  vec3 g = d;
+  float c1 = cos(1.15), s1 = sin(1.15);
+  g = vec3(g.x, c1 * g.y - s1 * g.z, s1 * g.y + c1 * g.z);
+  float c2 = cos(0.55), s2 = sin(0.55);
+  g = vec3(c2 * g.x - s2 * g.z, g.y, s2 * g.x + c2 * g.z);
+  float lat = g.y;
+  float band = exp(-lat * lat * 26.0);
+  if (band < 0.004) return vec3(0.0);
+  float n1 = fbm3(g * 3.5 + 2.0);
+  float n2 = fbm3(g * 8.0 + 7.0);
+  float dust = smoothstep(0.42, 0.68, fbm3(g * 6.0 + vec3(13.0, 5.0, 2.0)));
+  float dens = band * (0.3 + 1.0 * n1 * n1) * (1.0 - 0.8 * dust * smoothstep(0.2, 1.0, band));
+  vec3 c = mix(vec3(0.5, 0.55, 0.92), vec3(1.0, 0.85, 0.7), n2);
+  vec3 bd = g - vec3(1.0, 0.0, 0.0);
+  float bulge = exp(-dot(bd, bd) * 7.0);
+  return c * dens * 0.55 + vec3(1.0, 0.86, 0.66) * bulge * 0.4 * (0.6 + 0.8 * n1);
+}
+
+/* ---------- 배경: 외부 은하 ---------- */
+vec3 galaxy(vec3 d, vec3 gd, float scale, float squash, float twist, float seed, vec3 tint) {
+  float dp = dot(d, gd);
+  if (dp < 0.985) return vec3(0.0);
+  vec3 a1 = normalize(cross(gd, vec3(0.2, 1.0, 0.35)));
+  vec3 a2 = cross(gd, a1);
+  float cs = cos(seed), sn = sin(seed);
+  vec2 uv = vec2(dot(d, a1), dot(d, a2));
+  uv = mat2(cs, -sn, sn, cs) * uv / scale;
+  uv.y /= squash;
+  float r = length(uv);
+  if (r > 4.0) return vec3(0.0);
+  float th = atan(uv.y, uv.x);
+  float arms = 0.5 + 0.5 * cos(2.0 * th - twist * log(r + 0.1));
+  float n = fbm2(uv * 2.5 + seed * 3.0);
+  float disk = exp(-r * 1.6) * (0.2 + 0.8 * arms * arms * smoothstep(0.1, 0.5, r)) * (0.5 + n);
+  float core = exp(-r * r * 12.0) * 1.8 + exp(-r * 3.5) * 0.5;
+  vec3 armCol = mix(tint, vec3(0.65, 0.75, 1.0), 0.5 * arms * smoothstep(0.3, 1.0, r));
+  return (disk * armCol + core * vec3(1.0, 0.9, 0.75)) * 0.5;
+}
+
+vec3 background(vec3 d) {
+  float pixAng = 2.0 * uTanFov / uRes.y;
+  vec3 col = vec3(0.0);
+  col += stars(d, 34.0, 0.90, pixAng);
+  col += stars(d, 80.0, 0.965, pixAng) * 0.5;
+  col += milkyWay(d);
+  col += galaxy(d, normalize(vec3(0.6, 0.35, -0.7)), 0.055, 0.5, 5.0, 1.0, vec3(1.0, 0.85, 0.7));
+  col += galaxy(d, normalize(vec3(-0.7, 0.15, 0.5)), 0.022, 0.75, 4.0, 2.0, vec3(0.8, 0.85, 1.0));
+  col += galaxy(d, normalize(vec3(0.1, -0.55, 0.8)), 0.03, 0.28, 6.0, 3.0, vec3(1.0, 0.9, 0.8));
+  return col;
+}
+
+/* ---------- 강착원반 ---------- */
+float diskNoise(float rr, float a, float t) {
+  float om = 0.707 / pow(rr, 1.5);        // 케플러 각속도
+  float ang = a - t * om;
+  float rad = rr + t * 0.12;              // 안쪽으로 흘러드는 패턴
+  vec3 q = vec3(cos(ang) * rr, rad * 2.5, sin(ang) * rr);
+  float n = fbm3(q * 1.3);
+  float ring = noise3(vec3(rad * 5.0, 3.1, 7.7));
+  return n * (0.6 + 0.6 * ring);
+}
+
+vec3 diskSample(vec3 p, vec3 rayDir, out float alpha) {
+  float rr = length(p.xz);
+  alpha = 0.0;
+  if (rr < 1.3 || rr > R_OUT) return vec3(0.0);
+  float a = atan(p.z, p.x);
+
+  // 전단(shear)에 의한 노이즈 붕괴를 막기 위한 두 레이어 크로스페이드
+  float T = 30.0;
+  float t1 = mod(uTime, T), t2 = mod(uTime + T * 0.5, T);
+  float w1 = 1.0 - abs(t1 / T * 2.0 - 1.0);
+  float n = mix(diskNoise(rr, a, t2), diskNoise(rr, a, t1), w1);
+  float d = clamp(n, 0.0, 1.0);
+
+  float inner  = smoothstep(2.3, 3.0, rr);
+  float outer  = 1.0 - smoothstep(R_OUT - 3.5, R_OUT, rr);
+  float plunge = smoothstep(1.3, 2.3, rr) * (1.0 - inner) * 0.28;   // ISCO 안쪽 낙하 영역
+  float radial = max(inner * outer, plunge);
+
+  float temp = pow(R_IN / rr, 0.75);
+  vec3 col = mix(vec3(1.0, 0.33, 0.07), vec3(1.0, 0.72, 0.42), smoothstep(0.35, 0.8, temp));
+  col = mix(col, vec3(1.0, 0.97, 0.94), smoothstep(0.8, 1.05, temp));
+
+  float intensity = pow(R_IN / rr, 1.3) * (0.4 + 1.6 * d * d) * radial;
+  intensity += exp(-abs(rr - 3.05) * 3.0) * 0.6 * (0.6 + 0.6 * d);   // 뜨거운 안쪽 테두리
+  alpha = clamp(radial * (0.35 + 1.1 * d), 0.0, 1.0);
+
+  // 도플러 빔 효과 + 중력 적색편이
+  vec3 tdir = vec3(-p.z, 0.0, p.x) / rr;
+  float beta = sqrt(0.5 / rr);
+  float gam = 1.0 / sqrt(1.0 - beta * beta);
+  vec3 nobs = -normalize(rayDir);
+  float dop = 1.0 / (gam * (1.0 - beta * dot(tdir, nobs)));
+  float shift = clamp(dop - 1.0, -0.6, 0.6);
+  col *= vec3(1.0 - 0.5 * shift, 1.0 - 0.15 * abs(shift), 1.0 + 0.7 * shift);
+  float gred = sqrt(max(1.0 - 1.0 / rr, 0.0));
+  intensity *= pow(dop, 3.0) * gred;
+
+  return col * intensity * uDiskBright;
+}
+
+/* ---------- 해석적 편향: 적분 구를 벗어난 뒤 무한원점까지 남은 빛 굽힘 ----------
+   측지선 힘 1.5 h² / r⁴ 를 직선 경로(충격 매개변수 b, 위치 s)에 대해 적분한 누적 함수.
+   2차 항 (15π/16)/b² 은 같은 분포로 배분해 수치 적분 구간과 매끄럽게 이어지게 한다. */
+float bendCum(float b, float s) {
+  float q = sqrt(b * b + s * s);
+  return s * (2.0 * s * s + 3.0 * b * b) / (2.0 * b * q * q * q);
+}
+vec3 bendToInfinity(vec3 pos, vec3 dir) {
+  float tc = -dot(pos, dir);
+  vec3 cvec = pos + tc * dir;
+  float b = max(length(cvec), 1e-3);
+  vec3 toC = -cvec / b;
+  float al = uGravity * (1.0 / b - bendCum(b, -tc)) * (1.0 + uGravity * 1.4726 / b);
+  return normalize(dir * cos(al) + toC * sin(al));
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
+  vec3 dir = normalize(uCamFwd + uTanFov * 2.0 * (uv.x * uCamRight + uv.y * uCamUp));
+
+  vec3 pos = uCamPos;
+  vec3 vel = dir;
+  vec3 col = vec3(0.0);
+  float trans = 1.0;
+  bool escaped = false, captured = false, opaque = false;
+
+  {
+    vec3 L = cross(pos, vel);
+    float h2 = dot(L, L);
+    for (int i = 0; i < 600; i++) {
+      if (i >= uSteps) break;
+      float r2 = dot(pos, pos);
+      float r = sqrt(r2);
+      if (r < 1.0) { captured = true; break; }
+      if (r > R_MARCH && dot(pos, vel) > 0.0) { escaped = true; break; }
+
+      // 스텝 크기는 반지름에 비례: 멀리서는 성큼, 광자 구 근처에서는 촘촘하게
+      float dt = clamp(r * 0.045, 0.02, 4.0);
+      vec3 acc = -1.5 * h2 * uGravity * pos / (r2 * r2 * r);
+      vec3 nvel = vel + acc * dt;
+      vec3 npos = pos + nvel * dt;
+
+      // 원반 평면(y=0) 통과 검사
+      if (pos.y * npos.y < 0.0) {
+        float f = pos.y / (pos.y - npos.y);
+        vec3 hp = mix(pos, npos, f);
+        float a;
+        vec3 dc = diskSample(hp, nvel, a);
+        col += trans * dc;
+        trans *= (1.0 - a);
+        if (trans < 0.02) { opaque = true; break; }
+      }
+
+      // 원반 주변의 옅은 발광 가스
+      float rxz = length(npos.xz);
+      float hz = exp(-abs(npos.y) * 2.5) * (1.0 - smoothstep(3.0, R_OUT + 1.5, rxz)) / (rxz + 0.5);
+      col += trans * vec3(1.0, 0.55, 0.25) * hz * dt * 0.1 * uDiskBright;
+
+      pos = npos; vel = nvel;
+    }
+  }
+
+  if (escaped) {
+    col += trans * background(bendToInfinity(pos, normalize(vel)));
+  } else if (!captured && !opaque) {
+    col += trans * background(normalize(vel)) * 0.5;
+  }
+
+  // 톤매핑
+  col *= uExposure;
+  col = 1.0 - exp(-col);
+  col = pow(col, vec3(0.92));
+  col *= 1.0 - 0.28 * dot(uv, uv);
+  col += (hash12(gl_FragCoord.xy + fract(uTime)) - 0.5) / 255.0;
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+// 빨려드는 입자 (포인트 스프라이트 + 근사 렌즈 변위)
+const VS_PART = `
+precision highp float;
+attribute vec4 aP;
+uniform vec3  uCamPos, uCamRight, uCamUp, uCamFwd;
+uniform float uTanFov, uAspect, uResY, uGravity;
+varying vec3 vCol;
+void main() {
+  vec3 rel = aP.xyz - uCamPos;
+  float z = dot(rel, uCamFwd);
+  if (z < 0.2) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; vCol = vec3(0.0); return; }
+  vec2 pxy = vec2(dot(rel, uCamRight), dot(rel, uCamUp)) / z;
+
+  vec3 brel = -uCamPos;
+  float bz = dot(brel, uCamFwd);
+  float vis = 1.0;
+  if (bz > 0.5) {
+    vec2 bxy = vec2(dot(brel, uCamRight), dot(brel, uCamUp)) / bz;
+    vec2 v = pxy - bxy;
+    float th = length(v);
+    if (z > bz + 0.3) {
+      // 얇은 렌즈 근사: 아인슈타인 반지름 기준 겉보기 위치 이동
+      float dls = z - bz;
+      float thE2 = 2.0 * uGravity * dls / (bz * z);
+      float th2 = th + thE2 / max(th, 0.01);
+      pxy = bxy + v / max(th, 1e-4) * th2;
+      th = th2;
+    }
+    if (z > bz && th < 2.6 / bz) vis = 0.0;   // 블랙홀 그림자에 가려짐
+  }
+
+  gl_Position = vec4(pxy.x / (uTanFov * uAspect), pxy.y / uTanFov, 0.0, 1.0);
+  float r = length(aP.xyz);
+  float hot = 1.0 - smoothstep(1.5, 6.5, r);
+  float size = (aP.w > 0.5 ? 0.09 : 0.06) * (1.0 + 1.2 * hot);
+  gl_PointSize = clamp(size / z / uTanFov * uResY * 0.5, 1.2, 20.0);
+
+  vec3 base = aP.w > 0.5 ? vec3(0.55, 0.7, 1.0) : vec3(1.0, 0.55, 0.25);
+  vec3 c = mix(base, vec3(1.0, 0.95, 0.9), hot);
+  float far = 1.0 - smoothstep(22.0, 30.0, r);
+  vCol = c * (0.14 + 0.55 * hot) * vis * far;
+}
+`;
+const FS_PART = `
+precision mediump float;
+varying vec3 vCol;
+void main() {
+  float d = length(gl_PointCoord - 0.5) * 2.0;
+  float a = 1.0 - smoothstep(0.0, 1.0, d);
+  a *= a;
+  gl_FragColor = vec4(vCol * a, 1.0);
+}
+`;
+
+/* ------------------------------------------------------------------ */
+/*  WebGL 초기화                                                        */
+/* ------------------------------------------------------------------ */
+const canvas = document.getElementById('c');
+const errBox = document.getElementById('err');
+function fail(msg) { errBox.textContent = msg; errBox.classList.add('visible'); }
+
+const gl = canvas.getContext('webgl', { antialias: false, alpha: false, depth: false, stencil: false, powerPreference: 'high-performance' })
+        || canvas.getContext('experimental-webgl');
+if (!gl) { fail('이 브라우저에서는 WebGL을 사용할 수 없습니다.\n최신 Chrome, Firefox, Safari, Edge 에서 열어 주세요.'); return; }
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error('셰이더 컴파일 오류:\n' + gl.getShaderInfoLog(s));
+  return s;
+}
+function link(vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('프로그램 링크 오류:\n' + gl.getProgramInfoLog(p));
+  return p;
+}
+function uniforms(p, names) { const o = {}; names.forEach(n => o[n] = gl.getUniformLocation(p, n)); return o; }
+
+let bhProg, partProg, bhU, partU;
+try {
+  bhProg = link(VS_QUAD, FS_BH);
+  bhU = uniforms(bhProg, ['uRes','uTime','uCamPos','uCamRight','uCamUp','uCamFwd','uTanFov','uDiskBright','uGravity','uExposure','uSteps']);
+  partProg = link(VS_PART, FS_PART);
+  partU = uniforms(partProg, ['uCamPos','uCamRight','uCamUp','uCamFwd','uTanFov','uAspect','uResY','uGravity']);
+} catch (e) { fail(String(e.message || e)); return; }
+
+const quadBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+const aPosQuad = gl.getAttribLocation(bhProg, 'aPos');
+
+/* ------------------------------------------------------------------ */
+/*  입자 시스템: 강착원반 나선 낙하 + 외부 기체 흐름                       */
+/* ------------------------------------------------------------------ */
+const N_DISK = 3200, N_STREAM = 1000, N = N_DISK + N_STREAM;
+const P = {
+  r: new Float32Array(N), phi: new Float32Array(N), rate: new Float32Array(N), kind: new Float32Array(N),
+  e1: new Float32Array(N * 3), e2: new Float32Array(N * 3),   // 초기 궤도면
+  f1: new Float32Array(N * 3), f2: new Float32Array(N * 3),   // 정렬된(원반) 궤도면
+  gPhi: new Float32Array(N),
+};
+const partData = new Float32Array(N * 4);
+const rnd = Math.random;
+function v3norm(v) { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0]/l, v[1]/l, v[2]/l]; }
+function v3cross(a, b) { return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+function v3dot(a, b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+function setV(arr, i, v) { arr[i*3] = v[0]; arr[i*3+1] = v[1]; arr[i*3+2] = v[2]; }
+
+const STREAMS = [];
+for (let s = 0; s < 4; s++) {
+  let n = v3norm([rnd()*2-1, rnd()*2-1, rnd()*2-1]);
+  if (n[1] < 0) n = [-n[0], -n[1], -n[2]];
+  if (n[1] < 0.15) n = v3norm([n[0], 0.3, n[2]]);
+  STREAMS.push({ n, phi: rnd() * Math.PI * 2 });
+}
+
+function setupPlane(i, n0) {
+  let ref = v3norm([rnd()*2-1, rnd()*2-1, rnd()*2-1]);
+  let e1 = v3norm(v3cross(n0, ref));
+  let e2 = v3cross(n0, e1);
+  const n1 = [0, 1, 0];
+  let f1 = v3norm([e1[0] - n1[0]*v3dot(e1,n1), e1[1] - n1[1]*v3dot(e1,n1), e1[2] - n1[2]*v3dot(e1,n1)]);
+  let f2 = v3cross(n1, f1);
+  setV(P.e1, i, e1); setV(P.e2, i, e2); setV(P.f1, i, f1); setV(P.f2, i, f2);
+}
+function spawn(i, initial) {
+  if (i < N_DISK) {
+    P.kind[i] = 0;
+    P.r[i] = initial ? 1.6 + 13.5 * rnd() : 4.0 + 11.0 * rnd();
+    P.phi[i] = rnd() * Math.PI * 2;
+    P.rate[i] = 0.6 + rnd();
+    if (initial) {
+      const n0 = v3norm([(rnd()-0.5)*0.16, 1, (rnd()-0.5)*0.16]);
+      setupPlane(i, n0);
+    }
+  } else {
+    P.kind[i] = 1;
+    const g = STREAMS[(i - N_DISK) % STREAMS.length];
+    P.r[i] = initial ? 2.5 + 25 * rnd() : 17 + 10 * rnd();
+    P.phi[i] = g.phi + (rnd() - 0.5) * 0.7 + (initial ? rnd() * 6 : 0);
+    P.rate[i] = 0.8 + 0.9 * rnd();
+    if (initial) {
+      const n0 = v3norm([g.n[0] + (rnd()-0.5)*0.12, g.n[1] + (rnd()-0.5)*0.12, g.n[2] + (rnd()-0.5)*0.12]);
+      setupPlane(i, n0);
+    }
+  }
+}
+for (let i = 0; i < N; i++) spawn(i, true);
+
+function sstep(a, b, x) { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
+
+function updateParticles(dt) {
+  for (let i = 0; i < N; i++) {
+    let r = P.r[i];
+    const om = 0.707 / Math.pow(r, 1.5);
+    P.phi[i] += om * dt;
+    const plunge = 1 + 5 * (1 - sstep(1.5, 3.0, r));
+    r -= P.rate[i] * (0.035 + 0.25 / r) * plunge * dt;
+    if (r < 1.03) { spawn(i, false); r = P.r[i]; }
+    P.r[i] = r;
+
+    const c = Math.cos(P.phi[i]), s = Math.sin(P.phi[i]);
+    const k = i * 3;
+    let x = c * P.e1[k] + s * P.e2[k], y = c * P.e1[k+1] + s * P.e2[k+1], z = c * P.e1[k+2] + s * P.e2[k+2];
+    if (P.kind[i] > 0.5) {
+      const al = 1 - sstep(4.0, 15.0, r);
+      const x1 = c * P.f1[k] + s * P.f2[k], y1 = c * P.f1[k+1] + s * P.f2[k+1], z1 = c * P.f1[k+2] + s * P.f2[k+2];
+      x = x * (1 - al) + x1 * al; y = y * (1 - al) + y1 * al; z = z * (1 - al) + z1 * al;
+      const l = Math.hypot(x, y, z) || 1;
+      x /= l; y /= l; z /= l;
+    }
+    const o = i * 4;
+    partData[o] = x * r; partData[o+1] = y * r; partData[o+2] = z * r; partData[o+3] = P.kind[i];
+  }
+}
+
+const partBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, partBuf);
+gl.bufferData(gl.ARRAY_BUFFER, partData, gl.DYNAMIC_DRAW);
+const aPPart = gl.getAttribLocation(partProg, 'aP');
+
+/* ------------------------------------------------------------------ */
+/*  카메라 & 입력                                                       */
+/* ------------------------------------------------------------------ */
+const cam = { yaw: 0.55, pitch: 0.22, dist: 24 };
+const DEFAULT_CAM = { ...cam };
+const FOV = 55 * Math.PI / 180;
+const tanFov = Math.tan(FOV / 2);
+const MIN_DIST = 3.6, MAX_DIST = 80;
+
+const settings = { disk: 1, speed: 1, grav: 1, auto: true, parts: true, scale: 0.7, steps: 260 };
+
+let dragging = false;
+const pointers = new Map();
+let lastPinch = 0, lastTap = 0;
+
+canvas.addEventListener('pointerdown', e => {
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  dragging = true; canvas.classList.add('dragging');
+  if (pointers.size === 2) { const p = [...pointers.values()]; lastPinch = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); }
+  const now = performance.now();
+  if (e.pointerType === 'touch' && now - lastTap < 300) resetCamera();
+  lastTap = now;
+});
+canvas.addEventListener('pointermove', e => {
+  if (!pointers.has(e.pointerId)) return;
+  const prev = pointers.get(e.pointerId);
+  const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 1) {
+    cam.yaw -= dx * 0.005;
+    cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch + dy * 0.005));
+  } else if (pointers.size === 2) {
+    const p = [...pointers.values()];
+    const d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+    if (lastPinch > 0) cam.dist = Math.max(MIN_DIST, Math.min(MAX_DIST, cam.dist * lastPinch / d));
+    lastPinch = d;
+  }
+});
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) lastPinch = 0;
+  if (pointers.size === 0) { dragging = false; canvas.classList.remove('dragging'); }
+}
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  cam.dist = Math.max(MIN_DIST, Math.min(MAX_DIST, cam.dist * Math.exp(e.deltaY * 0.0008)));
+}, { passive: false });
+canvas.addEventListener('dblclick', resetCamera);
+function resetCamera() { Object.assign(cam, DEFAULT_CAM); }
+
+/* ------------------------------------------------------------------ */
+/*  UI                                                                 */
+/* ------------------------------------------------------------------ */
+const $ = id => document.getElementById(id);
+function bindRange(id, key) {
+  const el = $(id), v = $(id + 'V');
+  const upd = () => { settings[key] = parseFloat(el.value); v.textContent = settings[key].toFixed(2); };
+  el.addEventListener('input', upd); upd();
+}
+bindRange('disk', 'disk'); bindRange('speed', 'speed'); bindRange('grav', 'grav');
+$('auto').addEventListener('change', e => settings.auto = e.target.checked);
+$('parts').addEventListener('change', e => settings.parts = e.target.checked);
+$('quality').addEventListener('change', e => applyQuality(e.target.value));
+function applyQuality(q) {
+  if (q === 'low') { settings.scale = 0.5; settings.steps = 160; }
+  else if (q === 'high') { settings.scale = 1.0; settings.steps = 420; }
+  else { settings.scale = 0.7; settings.steps = 260; }
+  resize(true);
+}
+$('reset').addEventListener('click', resetCamera);
+$('hide').addEventListener('click', () => { $('ui').classList.add('hidden'); $('show').classList.add('visible'); });
+$('showBtn').addEventListener('click', () => { $('ui').classList.remove('hidden'); $('show').classList.remove('visible'); });
+window.addEventListener('keydown', e => { if (e.key === 'r' || e.key === 'R') resetCamera(); });
+
+/* ------------------------------------------------------------------ */
+/*  렌더 루프                                                           */
+/* ------------------------------------------------------------------ */
+let W = 0, H = 0;
+function resize(force) {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.max(1, Math.floor(canvas.clientWidth * dpr * settings.scale));
+  const h = Math.max(1, Math.floor(canvas.clientHeight * dpr * settings.scale));
+  if (force || w !== W || h !== H) { W = canvas.width = w; H = canvas.height = h; gl.viewport(0, 0, W, H); }
+}
+window.addEventListener('resize', () => resize(false));
+
+let simTime = 0, last = performance.now(), fpsAcc = 0, fpsN = 0, fpsT = last;
+const fpsEl = $('fps');
+
+function frame(now) {
+  const dtReal = Math.min((now - last) / 1000, 0.1);
+  last = now;
+  if (settings.auto && !dragging) cam.yaw += dtReal * 0.05;
+  const dtSim = dtReal * settings.speed * 2.5;
+  simTime += dtSim;
+
+  resize(false);
+
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  const pos = [cam.dist * cp * Math.sin(cam.yaw), cam.dist * sp, cam.dist * cp * Math.cos(cam.yaw)];
+  const fwd = v3norm([-pos[0], -pos[1], -pos[2]]);
+  const right = v3norm(v3cross(fwd, [0, 1, 0]));
+  const up = v3cross(right, fwd);
+
+  // 1) 블랙홀 + 원반 + 배경 (광선 추적)
+  gl.disable(gl.BLEND);
+  gl.useProgram(bhProg);
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  gl.enableVertexAttribArray(aPosQuad);
+  gl.vertexAttribPointer(aPosQuad, 2, gl.FLOAT, false, 0, 0);
+  gl.uniform2f(bhU.uRes, W, H);
+  gl.uniform1f(bhU.uTime, simTime);
+  gl.uniform3fv(bhU.uCamPos, pos);
+  gl.uniform3fv(bhU.uCamRight, right);
+  gl.uniform3fv(bhU.uCamUp, up);
+  gl.uniform3fv(bhU.uCamFwd, fwd);
+  gl.uniform1f(bhU.uTanFov, tanFov);
+  gl.uniform1f(bhU.uDiskBright, settings.disk);
+  gl.uniform1f(bhU.uGravity, settings.grav);
+  gl.uniform1f(bhU.uExposure, 1.0);
+  gl.uniform1i(bhU.uSteps, settings.steps);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+  // 2) 빨려드는 입자 (가산 혼합)
+  if (settings.parts) {
+    updateParticles(dtSim);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.useProgram(partProg);
+    gl.bindBuffer(gl.ARRAY_BUFFER, partBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, partData);
+    gl.enableVertexAttribArray(aPPart);
+    gl.vertexAttribPointer(aPPart, 4, gl.FLOAT, false, 0, 0);
+    gl.uniform3fv(partU.uCamPos, pos);
+    gl.uniform3fv(partU.uCamRight, right);
+    gl.uniform3fv(partU.uCamUp, up);
+    gl.uniform3fv(partU.uCamFwd, fwd);
+    gl.uniform1f(partU.uTanFov, tanFov);
+    gl.uniform1f(partU.uAspect, W / H);
+    gl.uniform1f(partU.uResY, H);
+    gl.uniform1f(partU.uGravity, settings.grav);
+    gl.drawArrays(gl.POINTS, 0, N);
+    gl.disable(gl.BLEND);
+  }
+
+  fpsAcc += dtReal; fpsN++;
+  if (now - fpsT > 500) { fpsEl.textContent = (fpsN / fpsAcc).toFixed(0) + ' FPS · ' + W + '×' + H; fpsAcc = 0; fpsN = 0; fpsT = now; }
+  requestAnimationFrame(frame);
+}
+resize(true);
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
